@@ -1,15 +1,9 @@
 import { GameObject, ObjectColor, ObjectShape, RoundConfig } from '../types';
 
 const TARGET_COLORS = [ObjectColor.RED, ObjectColor.BLUE, ObjectColor.GREEN, ObjectColor.YELLOW];
-const SHAPES = [
-    ObjectShape.RECTANGLE, ObjectShape.CIRCLE, ObjectShape.TRIANGLE, 
-    ObjectShape.STAR, ObjectShape.SIX_POINT_STAR, ObjectShape.DIAMOND, 
-    ObjectShape.ARROW, ObjectShape.HEART, ObjectShape.RING, ObjectShape.FRAME,
-    ObjectShape.TEXT 
-];
 const CHARS = ['A', 'B', 'C', 'X', 'Y', 'Z', '7', '8', '9', '?', '!', '$', '%', '&', '#', 'Q', 'R', 'K'];
 
-// 5x5 Bitmaps for coarse hit testing of text shapes. 
+// 5x5 Bitmaps for coarse hit testing of text shapes.
 const CHAR_BITMAPS: Record<string, number[]> = {
     'A': [0,1,1,1,0, 1,0,0,0,1, 1,1,1,1,1, 1,0,0,0,1, 1,0,0,0,1],
     'B': [1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0, 1,0,0,0,1, 1,1,1,1,0],
@@ -36,7 +30,6 @@ function pointInPolygon(x: number, y: number, vertices: number[][]): boolean {
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
         const xi = vertices[i][0], yi = vertices[i][1];
         const xj = vertices[j][0], yj = vertices[j][1];
-        
         const intersect = ((yi > y) !== (yj > y))
             && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
         if (intersect) inside = !inside;
@@ -48,12 +41,12 @@ const POLYGONS = {
     [ObjectShape.TRIANGLE]: [[0.5, 0.05], [0.05, 0.95], [0.95, 0.95]],
     [ObjectShape.DIAMOND]: [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]],
     [ObjectShape.STAR]: [
-        [0.5, 0.05], [0.61, 0.35], [0.98, 0.35], [0.68, 0.57], 
-        [0.79, 0.91], [0.5, 0.70], [0.21, 0.91], [0.32, 0.57], 
+        [0.5, 0.05], [0.61, 0.35], [0.98, 0.35], [0.68, 0.57],
+        [0.79, 0.91], [0.5, 0.70], [0.21, 0.91], [0.32, 0.57],
         [0.02, 0.35], [0.39, 0.35]
     ],
     [ObjectShape.ARROW]: [
-        [0.5, 0.05], [0.05, 0.5], [0.25, 0.5], [0.25, 0.95], 
+        [0.5, 0.05], [0.05, 0.5], [0.25, 0.5], [0.25, 0.95],
         [0.75, 0.95], [0.75, 0.5], [0.95, 0.5]
     ],
     [ObjectShape.SIX_POINT_STAR]: {
@@ -95,7 +88,7 @@ function isPointInShape(x: number, y: number, obj: GameObject): boolean {
             if (nx > innerMin && nx < innerMax && ny > innerMin && ny < innerMax) return false;
             return true;
         }
-        case ObjectShape.CIRCLE: return distSq <= 0.25; 
+        case ObjectShape.CIRCLE: return distSq <= 0.25;
         case ObjectShape.RING: {
             const thickness = obj.strokeWidth || 0.2;
             const outerR = 0.5;
@@ -117,8 +110,8 @@ function isPointInShape(x: number, y: number, obj: GameObject): boolean {
                 return Math.pow(nx - 0.75, 2) + Math.pow(ny - 0.25, 2) <= 0.05;
             }
             if (ny >= 0.25) {
-                 const dx = Math.abs(nx - 0.5);
-                 return ny <= 0.85 - (dx * 1.5); 
+                const dx = Math.abs(nx - 0.5);
+                return ny <= 0.85 - (dx * 1.5);
             }
             return false;
         }
@@ -131,248 +124,392 @@ function isPointInShape(x: number, y: number, obj: GameObject): boolean {
             const idx = (Math.min(4, Math.max(0, gy)) * 5) + Math.min(4, Math.max(0, gx));
             return bitmap[idx] === 1;
         }
-        default: return distSq <= 0.22; 
+        default: return distSq <= 0.22;
     }
 }
 
 export const generateRoundConfig = (level: number, currentCash: number): RoundConfig => {
-  let targetCash = 1000;
-  if (level <= 10) targetCash = 1000;
-  else if (level <= 20) targetCash = 20000;
-  else if (level <= 30) targetCash = 500000;
-  else if (level <= 40) targetCash = 12500000;
-  else targetCash = 312500000;
+    let targetCash = 1000;
+    if (level <= 10) targetCash = 1000;
+    else if (level <= 20) targetCash = 20000;
+    else if (level <= 30) targetCash = 500000;
+    else if (level <= 40) targetCash = 12500000;
+    else targetCash = 312500000;
 
-  const duration = 3000;
-  const targetColor = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
-  const isClassified = level > 5 && Math.random() > 0.4;
+    const duration = 3000;
+    const targetColor = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
+    const isClassified = level > 5 && Math.random() > 0.4;
 
-  return { level, targetCash, duration, targetColor, targetArea: 0, isClassified };
+    return { level, targetCash, duration, targetColor, targetArea: 0, isClassified };
 };
 
-export const generateObjects = (config: RoundConfig): { objects: GameObject[], breakdown: Record<ObjectColor, number>, verticalDistribution: Record<ObjectColor, number[]> } => {
-  
-  const targetCoverage = 40 + Math.random() * 60; 
-  const objects: GameObject[] = [];
-  
-  // New "Art Style" Generator Logic
-  const styles = ['stack_pile', 'neat_grid', 'concentric_chaos', 'big_vs_small', 'typographic_storm'];
-  const style = styles[Math.floor(Math.random() * styles.length)];
-  
-  let currentCoverageEstimate = 0;
-  let attempts = 0;
+// Shuffle an array in place (Fisher-Yates)
+function shuffle<T>(arr: T[]): T[] {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
 
-  if (style === 'stack_pile') {
-      // Classic scattered look but sorted by size for depth
-      // Large items at bottom (low z-index), small items on top (high z-index)
-      const count = 30 + Math.floor(Math.random() * 30);
-      for(let i=0; i<count; i++) {
-          const w = 5 + Math.random() * 40;
-          const h = w; // Keep aspect mostly 1:1 for shapes, vary for rects later
-          const x = Math.random() * (100 - w);
-          const y = Math.random() * (100 - h);
-          const color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
-          const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-          
-          objects.push({
-              id: `stack-${i}`,
-              x, y, w, h: shape === ObjectShape.RECTANGLE ? w * (0.5 + Math.random()) : w,
-              rotation: Math.random() * 360,
-              color, shape,
-              zIndex: 0, // Will sort later
-              char: shape === ObjectShape.TEXT ? CHARS[Math.floor(Math.random() * CHARS.length)] : undefined,
-              area: 0
-          });
-      }
-  } 
-  else if (style === 'neat_grid') {
-      // Mondrian-esque: Aligned to grid, no rotation or 45 deg
-      const cols = 4 + Math.floor(Math.random() * 3);
-      const rows = 4 + Math.floor(Math.random() * 3);
-      const cw = 100/cols;
-      const ch = 100/rows;
-      
-      for(let r=0; r<rows; r++) {
-          for(let c=0; c<cols; c++) {
-              if(Math.random() > 0.6) continue; // Sparse
-              const color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
-              const shape = Math.random() > 0.7 ? ObjectShape.CIRCLE : ObjectShape.RECTANGLE;
-              const size = 0.5 + Math.random() * 0.4; // % of cell
-              
-              const w = cw * size;
-              const h = ch * size;
-              const x = (c * cw) + (cw - w)/2;
-              const y = (r * ch) + (ch - h)/2;
-              
-              objects.push({
-                  id: `grid-${r}-${c}`,
-                  x, y, w, h,
-                  rotation: shape === ObjectShape.RECTANGLE && Math.random() > 0.8 ? 45 : 0,
-                  color, shape,
-                  zIndex: 0,
-                  area: 0
-              });
-          }
-      }
-  }
-  else if (style === 'concentric_chaos') {
-      // Groups of objects centered on same point
-      const groups = 5 + Math.floor(Math.random() * 5);
-      for(let g=0; g<groups; g++) {
-          const cx = 10 + Math.random() * 80;
-          const cy = 10 + Math.random() * 80;
-          const layers = 3 + Math.floor(Math.random() * 4);
-          let size = 30 + Math.random() * 20;
-          
-          for(let l=0; l<layers; l++) {
-              const color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
-              // Alternating shapes
-              const shape = (l % 2 === 0) ? ObjectShape.CIRCLE : (Math.random() > 0.5 ? ObjectShape.RING : ObjectShape.STAR);
-              
-              objects.push({
-                  id: `conc-${g}-${l}`,
-                  x: cx - size/2,
-                  y: cy - size/2,
-                  w: size, h: size,
-                  rotation: (l * 15) % 360,
-                  color, shape,
-                  zIndex: -l, // Larger on bottom
-                  area: 0
-              });
-              size *= 0.6; // Shrink
-          }
-      }
-  }
-  else if (style === 'typographic_storm') {
-      // Mostly text and symbols
-      const count = 40 + Math.floor(Math.random() * 20);
-      for(let i=0; i<count; i++) {
-          const size = 10 + Math.random() * 30;
-          const x = Math.random() * (100 - size);
-          const y = Math.random() * (100 - size);
-          const color = TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)];
-          const char = CHARS[Math.floor(Math.random() * CHARS.length)];
-          
-          objects.push({
-              id: `type-${i}`,
-              x, y, w: size, h: size,
-              rotation: (Math.random() - 0.5) * 60,
-              color, shape: ObjectShape.TEXT, char,
-              zIndex: 0, area: 0
-          });
-      }
-  }
-  else {
-      // 'big_vs_small': Few giant objects, many tiny ones
-      // Giant
-      for(let i=0; i<5; i++) {
-          const w = 40 + Math.random() * 20;
-          const h = w;
-          objects.push({
-              id: `giant-${i}`,
-              x: Math.random() * (100 - w),
-              y: Math.random() * (100 - h),
-              w, h, rotation: Math.random() * 360,
-              color: TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)],
-              shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
-              zIndex: 0, area: 0
-          });
-      }
-      // Tiny
-      for(let i=0; i<50; i++) {
-          const w = 3 + Math.random() * 5;
-          objects.push({
-              id: `tiny-${i}`,
-              x: Math.random() * (100 - w),
-              y: Math.random() * (100 - w),
-              w, h: w, rotation: Math.random() * 360,
-              color: TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)],
-              shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
-              zIndex: 10, area: 0
-          });
-      }
-  }
+export const generateObjects = (config: RoundConfig, attempts = 0): { objects: GameObject[], breakdown: Record<ObjectColor, number>, verticalDistribution: Record<ObjectColor, number[]> } => {
+    const objects: GameObject[] = [];
 
-  // --- FORCE ALL COLORS ---
-  const presentColors = new Set(objects.map(o => o.color));
-  TARGET_COLORS.forEach((c) => {
-      if (!presentColors.has(c)) {
-          objects.push({
-              id: `forced-${c}`,
-              x: 40 + Math.random() * 20,
-              y: 40 + Math.random() * 20,
-              w: 15, h: 15, rotation: 0, color: c, shape: ObjectShape.CIRCLE,
-              zIndex: 100, area: 0
-          });
-      }
-  });
+    // Six Illusion-inspired art styles
+    const styles = [
+        'wave_interference',
+        'radial_petals',
+        'stripe_overlay',
+        'mondrian_blocks',
+        'scatter_bloom',
+        'concentric_rings',
+    ];
+    const style = styles[Math.floor(Math.random() * styles.length)];
 
-  // --- 3D Sorting ---
-  // Sort objects so smaller ones are generally on top (higher index in array = drawn later)
-  // We can also just randomize, but size-sorting gives a "pile" effect
-  objects.sort((a, b) => (b.w * b.h) - (a.w * a.h)); 
-  // Update zIndex prop for stability if needed, though array order dictates DOM order
-  objects.forEach((o, i) => o.zIndex = i);
+    // ── STYLE: Wave Interference ─────────────────────────────────────────────
+    // Dense regular grid of shapes whose color is determined by overlapping
+    // sinusoidal waves — produces moiré-like interference patterns.
+    if (style === 'wave_interference') {
+        const shapeChoices = [ObjectShape.CIRCLE, ObjectShape.DIAMOND, ObjectShape.RECTANGLE, ObjectShape.TRIANGLE];
+        const shape = shapeChoices[Math.floor(Math.random() * shapeChoices.length)];
+        const cellSize = 7 + Math.random() * 4;      // 7–11 %
+        const spacing  = cellSize * 1.25;
 
-  // --- CALCULATION (Exact Pixel Count) ---
-  const breakdown = {
-      [ObjectColor.RED]: 0, [ObjectColor.BLUE]: 0, [ObjectColor.GREEN]: 0, [ObjectColor.YELLOW]: 0, [ObjectColor.WHITE]: 0
-  };
+        // Two independent wave frequencies
+        const f1 = 0.18 + Math.random() * 0.28;
+        const f2 = 0.10 + Math.random() * 0.20;
+        const f3 = 0.22 + Math.random() * 0.30;
+        const f4 = 0.08 + Math.random() * 0.18;
 
-  const SAMPLES_X = 350; 
-  const SAMPLES_Y = 350; 
-  const TOTAL_SAMPLES = SAMPLES_X * SAMPLES_Y;
-  
-  const verticalDistribution: Record<ObjectColor, number[]> = {
-      [ObjectColor.RED]: new Array(SAMPLES_Y).fill(0),
-      [ObjectColor.BLUE]: new Array(SAMPLES_Y).fill(0),
-      [ObjectColor.GREEN]: new Array(SAMPLES_Y).fill(0),
-      [ObjectColor.YELLOW]: new Array(SAMPLES_Y).fill(0),
-      [ObjectColor.WHITE]: new Array(SAMPLES_Y).fill(0),
-  };
+        let idx = 0;
+        for (let row = -1; row * spacing < 110; row++) {
+            for (let col = -1; col * spacing < 110; col++) {
+                const x = col * spacing;
+                const y = row * spacing;
+                // Interference value in [-2, 2]
+                const v = Math.sin(col * f1 + row * f2) + Math.sin(col * f3 - row * f4);
+                const colorIdx = Math.floor(((v + 2) / 4) * 4) % 4;
+                const color = TARGET_COLORS[colorIdx];
 
-  for (let i = 0; i < SAMPLES_X; i++) {
-      for (let j = 0; j < SAMPLES_Y; j++) {
-          const px = (i / SAMPLES_X) * 100 + (100/SAMPLES_X)/2;
-          const py = (j / SAMPLES_Y) * 100 + (100/SAMPLES_Y)/2;
+                objects.push({
+                    id: `wi-${idx++}`,
+                    x, y, w: cellSize, h: cellSize,
+                    rotation: Math.round(Math.random() * 3) * 90,
+                    color, shape,
+                    zIndex: 0, area: 0,
+                });
+            }
+        }
+    }
 
-          let topObj: GameObject | null = null;
-          // Iterate backwards (top z-index first)
-          for (let k = objects.length - 1; k >= 0; k--) {
-              if (isPointInShape(px, py, objects[k])) {
-                  topObj = objects[k];
-                  break; 
-              }
-          }
+    // ── STYLE: Radial Petals (Mandala) ────────────────────────────────────────
+    // Objects placed in angular wedge-segments radiating from a central point,
+    // like a mandala or compass rose. Colour is determined by which "petal"
+    // (angular slice) the position falls in.
+    else if (style === 'radial_petals') {
+        const cx = 50, cy = 50;
+        const numPetals = [4, 6, 8][Math.floor(Math.random() * 3)];
+        const maxR = 52;
+        const numRings = 8;
 
-          if (topObj) {
-              breakdown[topObj.color]++;
-              verticalDistribution[topObj.color][j]++;
-          } else {
-              breakdown[ObjectColor.WHITE]++;
-              verticalDistribution[ObjectColor.WHITE][j]++;
-          }
-      }
-  }
+        const shapeChoices = [ObjectShape.CIRCLE, ObjectShape.DIAMOND, ObjectShape.TRIANGLE, ObjectShape.STAR];
+        const segShape = shapeChoices[Math.floor(Math.random() * shapeChoices.length)];
 
-  const resultBreakdown: any = {};
-  for (const c of TARGET_COLORS) {
-      resultBreakdown[c] = (breakdown[c] / TOTAL_SAMPLES) * 100;
-  }
-  
-  const whitePct = (breakdown[ObjectColor.WHITE] / TOTAL_SAMPLES) * 100;
+        // Assign colours to petals, cycling through the 4 target colours
+        const colorOffset = Math.floor(Math.random() * 4);
+        const petalColors: ObjectColor[] = [];
+        for (let p = 0; p < numPetals; p++) {
+            petalColors.push(TARGET_COLORS[(p + colorOffset) % 4]);
+        }
 
-  // --- CONSTRAINT CHECK ---
-  const hasZeroAreaColor = TARGET_COLORS.some(c => resultBreakdown[c] < 0.5); 
+        let idx = 0;
+        for (let ring = 1; ring <= numRings; ring++) {
+            const r = (ring / numRings) * maxR;
+            const countInRing = numPetals * ring;
+            const size = (maxR / numRings) * 0.90;
 
-  if (whitePct > 60 || hasZeroAreaColor) {
-      if (attempts > 5) {
-           // Fallback
-      } else {
-          // Retry
-           return generateObjects(config);
-      }
-  }
+            for (let i = 0; i < countInRing; i++) {
+                const angle = (i / countInRing) * Math.PI * 2;
+                const petalIdx = Math.floor((angle / (Math.PI * 2)) * numPetals) % numPetals;
+                const color = petalColors[petalIdx];
+                const px = cx + r * Math.cos(angle);
+                const py = cy + r * Math.sin(angle);
 
-  return { objects, breakdown: resultBreakdown, verticalDistribution };
+                objects.push({
+                    id: `rp-${idx++}`,
+                    x: px - size / 2,
+                    y: py - size / 2,
+                    w: size, h: size,
+                    rotation: (angle * 180 / Math.PI) + Math.random() * 15 - 7.5,
+                    color, shape: segShape,
+                    zIndex: 0, area: 0,
+                });
+            }
+        }
+        // Centre medallion
+        const centreColor = petalColors[colorOffset % numPetals];
+        objects.push({ id: 'rp-centre', x: cx - 7, y: cy - 7, w: 14, h: 14, rotation: 0, color: centreColor, shape: ObjectShape.CIRCLE, zIndex: 1, area: 0 });
+    }
+
+    // ── STYLE: Stripe Overlay ─────────────────────────────────────────────────
+    // Parallel diagonal stripe bands, each filled with shapes of one colour.
+    // The stripe angle and width vary, making colour proportions hard to judge.
+    else if (style === 'stripe_overlay') {
+        const angle = (20 + Math.random() * 45) * (Math.PI / 180);
+        const stripeWidth = 14 + Math.random() * 18;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const cellSize = 6 + Math.random() * 4;
+        const spacing  = cellSize * 1.3;
+
+        const shapeChoices = [ObjectShape.CIRCLE, ObjectShape.RECTANGLE, ObjectShape.TRIANGLE, ObjectShape.DIAMOND, ObjectShape.STAR];
+        const shape = shapeChoices[Math.floor(Math.random() * shapeChoices.length)];
+
+        let idx = 0;
+        for (let row = -4; row * spacing < 115; row++) {
+            for (let col = -4; col * spacing < 115; col++) {
+                const x = col * spacing;
+                const y = row * spacing;
+                const proj = x * cos + y * sin;
+                const stripeIdx = Math.floor(proj / stripeWidth);
+                const colorIdx = ((stripeIdx % 4) + 4) % 4;
+                const jx = (Math.random() - 0.5) * spacing * 0.35;
+                const jy = (Math.random() - 0.5) * spacing * 0.35;
+
+                objects.push({
+                    id: `so-${idx++}`,
+                    x: x + jx, y: y + jy,
+                    w: cellSize, h: cellSize,
+                    rotation: stripeIdx * 45 + (Math.random() - 0.5) * 30,
+                    color: TARGET_COLORS[colorIdx], shape,
+                    zIndex: 0, area: 0,
+                });
+            }
+        }
+    }
+
+    // ── STYLE: Mondrian Blocks ────────────────────────────────────────────────
+    // Canvas subdivided into irregular rectangles à la Mondrian, each filled
+    // solidly with one colour. Span sizes are randomised, colours balanced.
+    else if (style === 'mondrian_blocks') {
+        const baseGrid = 6 + Math.floor(Math.random() * 4); // 6–9
+        const cellW = 100 / baseGrid;
+        const cellH = 100 / baseGrid;
+        const occupied: boolean[][] = Array.from({ length: baseGrid }, () => new Array(baseGrid).fill(false));
+
+        // Track area per colour so we can balance them
+        const colorArea: Record<ObjectColor, number> = {
+            [ObjectColor.RED]: 0, [ObjectColor.BLUE]: 0,
+            [ObjectColor.GREEN]: 0, [ObjectColor.YELLOW]: 0, [ObjectColor.WHITE]: 0,
+        };
+
+        let objIdx = 0;
+        for (let row = 0; row < baseGrid; row++) {
+            for (let col = 0; col < baseGrid; col++) {
+                if (occupied[row][col]) continue;
+
+                const maxSW = Math.min(3, baseGrid - col);
+                const maxSH = Math.min(3, baseGrid - row);
+                let spanW = 1 + Math.floor(Math.random() * maxSW);
+                let spanH = 1 + Math.floor(Math.random() * maxSH);
+
+                // Verify all cells are free; fall back to 1×1 if not
+                let allFree = true;
+                outer: for (let r = row; r < row + spanH; r++) {
+                    for (let c = col; c < col + spanW; c++) {
+                        if (occupied[r][c]) { allFree = false; break outer; }
+                    }
+                }
+                if (!allFree) { spanW = 1; spanH = 1; }
+
+                // Mark cells occupied
+                for (let r = row; r < row + spanH; r++)
+                    for (let c = col; c < col + spanW; c++)
+                        occupied[r][c] = true;
+
+                // Assign the colour with the least area so far
+                const color = TARGET_COLORS.reduce((a, b) => colorArea[a] <= colorArea[b] ? a : b);
+                colorArea[color] += spanW * spanH;
+
+                // Slight inset gap between blocks
+                const gap = 1.2;
+                objects.push({
+                    id: `mb-${objIdx++}`,
+                    x: col * cellW + gap / 2,
+                    y: row * cellH + gap / 2,
+                    w: spanW * cellW - gap,
+                    h: spanH * cellH - gap,
+                    rotation: 0,
+                    color, shape: ObjectShape.RECTANGLE,
+                    zIndex: 0, area: 0,
+                });
+            }
+        }
+    }
+
+    // ── STYLE: Scatter Bloom ──────────────────────────────────────────────────
+    // Several focal "bloom" clusters, each dominated by one colour. Shapes are
+    // densest at the cluster centre and fade outward. A sparse background field
+    // ties the clusters together.
+    else if (style === 'scatter_bloom') {
+        const numBlooms = 3 + Math.floor(Math.random() * 3);
+        const shuffledColors = shuffle([...TARGET_COLORS]);
+
+        const shapeChoices = [ObjectShape.CIRCLE, ObjectShape.STAR, ObjectShape.DIAMOND, ObjectShape.HEART, ObjectShape.TRIANGLE, ObjectShape.SIX_POINT_STAR];
+        const bloomShape = shapeChoices[Math.floor(Math.random() * shapeChoices.length)];
+
+        let idx = 0;
+        for (let b = 0; b < numBlooms; b++) {
+            const bcx = 15 + Math.random() * 70;
+            const bcy = 15 + Math.random() * 70;
+            const bloomColor = shuffledColors[b % shuffledColors.length];
+            const count = 30 + Math.floor(Math.random() * 25);
+
+            for (let i = 0; i < count; i++) {
+                // Power-law distribution — concentrated near centre
+                const r = Math.pow(Math.random(), 0.55) * 40;
+                const a = Math.random() * Math.PI * 2;
+                const bx = bcx + r * Math.cos(a);
+                const by = bcy + r * Math.sin(a);
+                const size = Math.max(2.5, 13 - r * 0.22);
+
+                objects.push({
+                    id: `sb-${idx++}`,
+                    x: bx - size / 2,
+                    y: by - size / 2,
+                    w: size, h: size,
+                    rotation: Math.random() * 360,
+                    color: bloomColor, shape: bloomShape,
+                    zIndex: 0, area: 0,
+                });
+            }
+        }
+
+        // Sparse background scatter
+        for (let i = 0; i < 25; i++) {
+            const size = 3 + Math.random() * 9;
+            objects.push({
+                id: `sb-bg-${i}`,
+                x: Math.random() * (100 - size),
+                y: Math.random() * (100 - size),
+                w: size, h: size,
+                rotation: Math.random() * 360,
+                color: TARGET_COLORS[Math.floor(Math.random() * 4)],
+                shape: bloomShape,
+                zIndex: 0, area: 0,
+            });
+        }
+    }
+
+    // ── STYLE: Concentric Rings ───────────────────────────────────────────────
+    // Several groups of concentric shapes sharing a common centre, creating an
+    // eye-like or target-board composition. Layers alternate colour and shape.
+    else {
+        const groups = 4 + Math.floor(Math.random() * 5);
+        const ringShapes = [ObjectShape.CIRCLE, ObjectShape.RING, ObjectShape.STAR, ObjectShape.DIAMOND, ObjectShape.FRAME];
+
+        let idx = 0;
+        for (let g = 0; g < groups; g++) {
+            const gcx = 10 + Math.random() * 80;
+            const gcy = 10 + Math.random() * 80;
+            const layers = 4 + Math.floor(Math.random() * 4);
+            let size = 35 + Math.random() * 25;
+            const colorStart = Math.floor(Math.random() * 4);
+
+            for (let l = 0; l < layers; l++) {
+                const color = TARGET_COLORS[(colorStart + l) % 4];
+                const shape = ringShapes[l % ringShapes.length];
+                const strokeW = 0.15 + Math.random() * 0.15;
+
+                objects.push({
+                    id: `cr-${idx++}`,
+                    x: gcx - size / 2,
+                    y: gcy - size / 2,
+                    w: size, h: size,
+                    rotation: l * 22.5,
+                    color, shape, strokeWidth: strokeW,
+                    zIndex: -l,
+                    area: 0,
+                });
+                size *= 0.62;
+            }
+        }
+    }
+
+    // ── FORCE ALL COLOURS to appear ──────────────────────────────────────────
+    // Ensures constraint check passes by inserting a small marker for any missing colour.
+    const presentColors = new Set(objects.map(o => o.color));
+    TARGET_COLORS.forEach(c => {
+        if (!presentColors.has(c)) {
+            objects.push({
+                id: `forced-${c}`,
+                x: 38 + Math.random() * 24,
+                y: 38 + Math.random() * 24,
+                w: 12, h: 12, rotation: 0, color: c, shape: ObjectShape.CIRCLE,
+                zIndex: 200, area: 0,
+            });
+        }
+    });
+
+    // ── DEPTH SORT ────────────────────────────────────────────────────────────
+    // Larger objects draw first (behind); smaller objects draw last (in front).
+    // For grid/stripe styles this is a no-op; for bloom/petals it adds depth.
+    objects.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+    objects.forEach((o, i) => { o.zIndex = i; });
+
+    // ── EXACT PIXEL-SAMPLE CALCULATION ───────────────────────────────────────
+    const breakdown: Record<ObjectColor, number> = {
+        [ObjectColor.RED]: 0, [ObjectColor.BLUE]: 0,
+        [ObjectColor.GREEN]: 0, [ObjectColor.YELLOW]: 0, [ObjectColor.WHITE]: 0,
+    };
+
+    const SAMPLES_X = 350;
+    const SAMPLES_Y = 350;
+    const TOTAL_SAMPLES = SAMPLES_X * SAMPLES_Y;
+
+    const verticalDistribution: Record<ObjectColor, number[]> = {
+        [ObjectColor.RED]:    new Array(SAMPLES_Y).fill(0),
+        [ObjectColor.BLUE]:   new Array(SAMPLES_Y).fill(0),
+        [ObjectColor.GREEN]:  new Array(SAMPLES_Y).fill(0),
+        [ObjectColor.YELLOW]: new Array(SAMPLES_Y).fill(0),
+        [ObjectColor.WHITE]:  new Array(SAMPLES_Y).fill(0),
+    };
+
+    for (let i = 0; i < SAMPLES_X; i++) {
+        for (let j = 0; j < SAMPLES_Y; j++) {
+            const px = (i / SAMPLES_X) * 100 + (100 / SAMPLES_X) / 2;
+            const py = (j / SAMPLES_Y) * 100 + (100 / SAMPLES_Y) / 2;
+
+            let topObj: GameObject | null = null;
+            for (let k = objects.length - 1; k >= 0; k--) {
+                if (isPointInShape(px, py, objects[k])) {
+                    topObj = objects[k];
+                    break;
+                }
+            }
+
+            if (topObj) {
+                breakdown[topObj.color]++;
+                verticalDistribution[topObj.color][j]++;
+            } else {
+                breakdown[ObjectColor.WHITE]++;
+                verticalDistribution[ObjectColor.WHITE][j]++;
+            }
+        }
+    }
+
+    const resultBreakdown: Record<ObjectColor, number> = {} as Record<ObjectColor, number>;
+    for (const c of TARGET_COLORS) {
+        resultBreakdown[c] = (breakdown[c] / TOTAL_SAMPLES) * 100;
+    }
+    const whitePct = (breakdown[ObjectColor.WHITE] / TOTAL_SAMPLES) * 100;
+
+    // ── CONSTRAINT CHECK ──────────────────────────────────────────────────────
+    const hasZeroArea = TARGET_COLORS.some(c => resultBreakdown[c] < 0.5);
+
+    if ((whitePct > 60 || hasZeroArea) && attempts < 6) {
+        return generateObjects(config, attempts + 1);
+    }
+
+    return { objects, breakdown: resultBreakdown, verticalDistribution };
 };
