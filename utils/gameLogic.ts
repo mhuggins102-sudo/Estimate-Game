@@ -419,6 +419,207 @@ function genLargeOverlapping(): GameObject[] {
     return objs;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 7 – WAVY STRIPES
+// Dense grid of small cells coloured by a dual-sine-wave formula.
+// The interference between two waves with different frequencies creates the
+// same organic ribbon look seen on real Illusion cards — but the boundaries
+// appear straight while the actual colour percentages deceive the eye.
+// ─────────────────────────────────────────────────────────────────────────────
+function genWavyStripes(): GameObject[] {
+    const cellSize   = rnd(4.5, 7.5);
+    const step       = cellSize + 0.25;
+    const colorOrder = shuffle([0, 1, 2, 3]);
+
+    const numBands  = rndInt(4, 9);       // full colour cycles across canvas
+    const bandW     = 100 / numBands;
+    const waveAmp1  = rnd(5, 22);         // primary wave amplitude (% units)
+    const waveFreq1 = rnd(0.03, 0.10);
+    const waveAmp2  = rnd(1, 7);          // secondary wave (creates interference)
+    const waveFreq2 = rnd(0.07, 0.18);
+    const direction = pick(['h', 'v', 'd'] as const);
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -2; row * step < 108; row++) {
+        for (let c = -2; c * step < 108; c++) {
+            const x  = c * step;
+            const y  = row * step;
+            const cx = x + cellSize / 2;
+            const cy = y + cellSize / 2;
+
+            // Position along the band axis, perturbed by the wave function
+            let pos: number;
+            if (direction === 'h') {
+                pos = cy
+                    + waveAmp1 * Math.sin(cx * waveFreq1)
+                    + waveAmp2 * Math.sin(cx * waveFreq2 + 1.5);
+            } else if (direction === 'v') {
+                pos = cx
+                    + waveAmp1 * Math.sin(cy * waveFreq1)
+                    + waveAmp2 * Math.sin(cy * waveFreq2 + 0.7);
+            } else {
+                const diag = cx * 0.707 + cy * 0.707;
+                const perp = cx * 0.707 - cy * 0.707;
+                pos = diag + waveAmp1 * Math.sin(perp * waveFreq1 * 1.4);
+            }
+
+            const period     = bandW * 4;
+            const normalized = ((pos % period) + period * 100) % period;
+            const bandIdx    = Math.floor(normalized / bandW) % 4;
+            const color      = TARGET_COLORS[colorOrder[bandIdx]];
+
+            objs.push(solid(`wv-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+        }
+    }
+    return objs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 8 – RADIAL PIE / PINWHEEL
+// Each cell is coloured by its angle from a focal point, creating pie-slice
+// or spiral patterns. The optional twist parameter morphs a clean pie into a
+// pinwheel — a classic Illusion card motif.
+// ─────────────────────────────────────────────────────────────────────────────
+function genRadialPie(): GameObject[] {
+    const cellSize   = rnd(4.5, 7.5);
+    const step       = cellSize + 0.25;
+    const colorOrder = shuffle([0, 1, 2, 3]);
+
+    const numWedges = rndInt(4, 16);            // total angular wedges
+    const cx        = rnd(28, 72);
+    const cy        = rnd(28, 72);
+    const twist     = rnd(-0.05, 0.05);         // spiral coefficient (0 = flat pie)
+    const innerGap  = Math.random() < 0.25 ? rnd(6, 16) : 0; // optional blank centre
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -2; row * step < 108; row++) {
+        for (let c = -2; c * step < 108; c++) {
+            const x  = c * step;
+            const y  = row * step;
+            const dx = x + cellSize / 2 - cx;
+            const dy = y + cellSize / 2 - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < innerGap) continue;
+
+            const angle        = (Math.atan2(dy, dx) + Math.PI * 2) % (Math.PI * 2);
+            const twistedAngle = (angle + dist * twist + Math.PI * 40) % (Math.PI * 2);
+            const wedgeIdx     = Math.floor(twistedAngle / (Math.PI * 2 / numWedges)) % 4;
+            const color        = TARGET_COLORS[colorOrder[wedgeIdx]];
+
+            objs.push(solid(`rp-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+        }
+    }
+    return objs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 9 – CONCENTRIC WAVE RINGS
+// Distance from a focal point determines the colour band, with an optional
+// angular wave that turns clean circles into flower-petal or star-ripple rings.
+// The squish ratio makes elliptical variants for added visual variety.
+// ─────────────────────────────────────────────────────────────────────────────
+function genConcentricWaveRings(): GameObject[] {
+    const cellSize   = rnd(4.5, 7.0);
+    const step       = cellSize + 0.25;
+    const colorOrder = shuffle([0, 1, 2, 3]);
+
+    const cx       = rnd(25, 75);
+    const cy       = rnd(25, 75);
+    const ringBand = rnd(5, 16);            // colour band width (% units)
+    const waveAmp  = rnd(0, 5);            // angular perturbation amplitude
+    const waveFreq = rndInt(3, 9);         // petal count when waveAmp > 0
+    const squishX  = rnd(0.65, 1.35);     // ellipse aspect ratio
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -2; row * step < 108; row++) {
+        for (let c = -2; c * step < 108; c++) {
+            const x  = c * step;
+            const y  = row * step;
+            const dx = (x + cellSize / 2 - cx) * squishX;
+            const dy = (y + cellSize / 2 - cy) / squishX;
+
+            const angle  = Math.atan2(dy, dx);
+            const dist   = Math.sqrt(dx * dx + dy * dy)
+                         + waveAmp * Math.sin(angle * waveFreq);
+
+            const period     = ringBand * 4;
+            const normalized = ((dist % period) + period * 100) % period;
+            const ringIdx    = Math.floor(normalized / ringBand) % 4;
+            const color      = TARGET_COLORS[colorOrder[ringIdx]];
+
+            objs.push(solid(`cr-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+        }
+    }
+    return objs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 10 – CHARACTER / TEXT GRID
+// A regular grid (or loose scatter) of alphanumeric characters, each solid-
+// filled in one of the four colours. The research notes that real Illusion
+// cards include "occasional letter or number" — this makes that a full style.
+// ─────────────────────────────────────────────────────────────────────────────
+function genTextGrid(): GameObject[] {
+    const CHARS = [
+        'A', 'B', 'E', 'H', 'K', 'M', 'N', 'R', 'S', 'T', 'W', 'X',
+        '3', '5', '6', '8', '+', '■', '●', '◆',
+    ];
+    const colorOrder = shuffle([0, 1, 2, 3]);
+    const useGrid    = Math.random() < 0.6;
+    const objs: GameObject[] = [];
+
+    if (useGrid) {
+        const cellSize = rnd(10, 16);
+        const step     = cellSize * rnd(1.10, 1.25);
+        const pattern  = rndInt(0, 2); // 0=cols, 1=rows, 2=diagonal
+        const char     = pick(CHARS);
+        let idx = 0;
+
+        for (let row = -1; row * step < 108; row++) {
+            for (let c = -1; c * step < 108; c++) {
+                const x = c * step;
+                const y = row * step;
+                let ci: number;
+                switch (pattern) {
+                    case 0:  ci = ((c         % 4) + 4) % 4; break;
+                    case 1:  ci = ((row        % 4) + 4) % 4; break;
+                    default: ci = (((c + row)  % 4) + 4) % 4; break;
+                }
+                const color = TARGET_COLORS[colorOrder[ci]];
+                const obj: GameObject = {
+                    ...solid(`tx-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.TEXT),
+                    char,
+                };
+                objs.push(obj);
+            }
+        }
+    } else {
+        // Scattered characters of varying sizes
+        const count = rndInt(22, 48);
+        for (let i = 0; i < count; i++) {
+            const size  = rnd(6, 22);
+            const x     = rnd(-2, 98 - size);
+            const y     = rnd(-2, 98 - size);
+            const color = TARGET_COLORS[colorOrder[i % 4]];
+            const char  = pick(CHARS);
+            const rot   = rnd(0, 360);
+            const obj: GameObject = {
+                ...solid(`tx-${i}`, x, y, size, size, color, ObjectShape.TEXT, rot),
+                char,
+            };
+            objs.push(obj);
+        }
+    }
+    return objs;
+}
+
 // ── MAIN EXPORT ───────────────────────────────────────────────────────────────
 export const generateObjects = (
     config: RoundConfig,
@@ -432,6 +633,10 @@ export const generateObjects = (
         genBoldBlocks,
         genParallelStripes,
         genLargeOverlapping,
+        genWavyStripes,          // NEW — dual-sine wavy ribbons
+        genRadialPie,            // NEW — pie/pinwheel radial slices
+        genConcentricWaveRings,  // NEW — distance-based rings with petal waves
+        genTextGrid,             // NEW — character/letter grid
     ]);
     const objects = generator();
 
