@@ -46,7 +46,8 @@ export interface GameObject {
   color: ObjectColor;
   shape: ObjectShape;
   borderWidth?: number; // For Mondrian style framing
-  strokeWidth?: number; // For Rings/Frames (0.0 to 0.5 relative to size)
+  strokeWidth?: number; // For Rings/Frames and hollow shapes (0.0 to 0.5 relative to size)
+  hollow?: boolean;     // If true, only the border is visible (stroke-only rendering)
   char?: string; // For text shapes
   area: number; // The actual visible percentage of total screen area
 }
