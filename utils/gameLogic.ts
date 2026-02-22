@@ -60,7 +60,10 @@ function isPointInSolidNorm(nx: number, ny: number, shape: ObjectShape): boolean
             return ny <= 0.92 - Math.abs(nx - 0.5) * 1.6;
         }
         case ObjectShape.TEXT:
-            return true; // full bounding box
+            // Bold capital letters cover ≈ 40% of their bounding box.
+            // A centred inner square of side 0.64 gives 0.64² ≈ 41% coverage,
+            // which matches typical Arial Black glyph ink density.
+            return nx >= 0.18 && nx <= 0.82 && ny >= 0.18 && ny <= 0.82;
         default:
             return distSq <= 0.25;
     }
@@ -762,27 +765,41 @@ function genMixedShapes(): GameObject[] {
     return objs;
 }
 
+// ── GENERATOR ROTATION ────────────────────────────────────────────────────────
+// All 13 styles are dealt from a shuffled deck so every style appears once
+// before any style repeats.  The deck auto-refills when exhausted.
+const ALL_GENERATORS: Array<() => GameObject[]> = [
+    genRegularGrid,
+    genConcentricNested,
+    genScattered,
+    genBoldBlocks,
+    genParallelStripes,
+    genLargeOverlapping,
+    genWavyStripes,
+    genRadialPie,
+    genConcentricWaveRings,
+    genTextGrid,
+    genVoronoi,
+    genStaggeredDots,
+    genMixedShapes,
+];
+
+let _generatorQueue: Array<() => GameObject[]> = [];
+
+function getNextGenerator(): () => GameObject[] {
+    if (_generatorQueue.length === 0) {
+        _generatorQueue = shuffle([...ALL_GENERATORS]);
+    }
+    return _generatorQueue.pop()!;
+}
+
 // ── MAIN EXPORT ───────────────────────────────────────────────────────────────
 export const generateObjects = (
     config: RoundConfig,
     attempts = 0,
 ): { objects: GameObject[]; breakdown: Record<ObjectColor, number>; verticalDistribution: Record<ObjectColor, number[]> } => {
 
-    const generator = pick([
-        genRegularGrid,
-        genConcentricNested,
-        genScattered,
-        genBoldBlocks,
-        genParallelStripes,
-        genLargeOverlapping,
-        genWavyStripes,          // dual-sine wavy ribbons
-        genRadialPie,            // pie/pinwheel radial slices
-        genConcentricWaveRings,  // distance-based rings with petal waves
-        genTextGrid,             // character/letter grid
-        genVoronoi,              // NEW — nearest-seed organic blobs
-        genStaggeredDots,        // NEW — hex-offset halftone dot grid
-        genMixedShapes,          // NEW — multi-shape mosaic, colour by position
-    ]);
+    const generator = getNextGenerator();
     const objects = generator();
 
     // ── ENSURE ALL COLOURS ARE PRESENT ───────────────────────────────────────
