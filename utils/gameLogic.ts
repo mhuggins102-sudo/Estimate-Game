@@ -620,6 +620,148 @@ function genTextGrid(): GameObject[] {
     return objs;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 11 – VORONOI MOSAIC
+// Scatter several "seed" points per colour.  Every grid cell is coloured by
+// whichever seed is closest (nearest-neighbour / Voronoi rule).  This creates
+// organic, amoeba-like blobs with no clear boundaries — impossible to estimate
+// by tracing outlines, forcing pure area judgement.
+// ─────────────────────────────────────────────────────────────────────────────
+function genVoronoi(): GameObject[] {
+    const cellSize      = rnd(4.5, 7.5);
+    const step          = cellSize + 0.25;
+    const colorOrder    = shuffle([0, 1, 2, 3]);
+    const seedsPerColor = rndInt(2, 5);
+
+    // Place seed points for each colour
+    const seeds: { cx: number; cy: number; ci: number }[] = [];
+    for (let c = 0; c < 4; c++) {
+        for (let s = 0; s < seedsPerColor; s++) {
+            seeds.push({ cx: rnd(5, 95), cy: rnd(5, 95), ci: c });
+        }
+    }
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -2; row * step < 108; row++) {
+        for (let c = -2; c * step < 108; c++) {
+            const x  = c * step;
+            const y  = row * step;
+            const cx = x + cellSize / 2;
+            const cy = y + cellSize / 2;
+
+            // Find nearest seed (squared distance — no sqrt needed for ordering)
+            let minDist = Infinity, nearestCI = 0;
+            for (const s of seeds) {
+                const dx = cx - s.cx, dy = cy - s.cy;
+                const d  = dx * dx + dy * dy;
+                if (d < minDist) { minDist = d; nearestCI = s.ci; }
+            }
+
+            const color = TARGET_COLORS[colorOrder[nearestCI]];
+            objs.push(solid(`vo-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+        }
+    }
+    return objs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 12 – STAGGERED DOT GRID (Halftone)
+// Alternating rows are offset by half a column width, producing hexagonal
+// close-packing reminiscent of classic halftone printing.  Circles, diamonds
+// or rectangles tile the canvas; colour follows col / row / diagonal striping.
+// Slight per-cell size variation gives a hand-drawn, organic quality.
+// ─────────────────────────────────────────────────────────────────────────────
+function genStaggeredDots(): GameObject[] {
+    const shape      = pick([ObjectShape.CIRCLE, ObjectShape.DIAMOND, ObjectShape.RECTANGLE]);
+    const useHollow  = Math.random() < 0.25;
+    const sw         = rnd(0.12, 0.22);
+    const cellSize   = rnd(6, 12);
+    const step       = cellSize * rnd(1.10, 1.30);
+    const colorOrder = shuffle([0, 1, 2, 3]);
+    const pattern    = rndInt(0, 2); // 0=cols, 1=rows, 2=diagonal
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -1; row * step < 108; row++) {
+        const offsetX = (row % 2 === 0) ? 0 : step / 2;
+        for (let c = -2; c * step < 115; c++) {
+            const x  = c * step + offsetX;
+            const y  = row * step;
+            // Slightly vary size for visual texture
+            const sz = cellSize * rnd(0.82, 1.00);
+
+            let ci: number;
+            switch (pattern) {
+                case 0:  ci = ((c        % 4) + 4) % 4; break;
+                case 1:  ci = ((row      % 4) + 4) % 4; break;
+                default: ci = (((c + row) % 4) + 4) % 4; break;
+            }
+            const color = TARGET_COLORS[colorOrder[ci]];
+
+            if (useHollow) {
+                objs.push(hollow(`sd-${idx++}`, x, y, sz, sz, color, shape, 0, sw));
+            } else {
+                objs.push(solid(`sd-${idx++}`, x, y, sz, sz, color, shape));
+            }
+        }
+    }
+    return objs;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STYLE 13 – MIXED-SHAPE MOSAIC
+// A regular grid where each cell is independently drawn with one of 3-4 chosen
+// shapes, cycling through the pool.  Colour follows a position rule (col / row
+// / diagonal / double-diagonal).  Mixing shapes in one card prevents the eye
+// from grouping by shape — only area comparison works.  Optionally all hollow.
+// ─────────────────────────────────────────────────────────────────────────────
+function genMixedShapes(): GameObject[] {
+    const allShapes = shuffle([
+        ObjectShape.CIRCLE,      ObjectShape.DIAMOND,
+        ObjectShape.TRIANGLE,    ObjectShape.STAR,
+        ObjectShape.HEART,       ObjectShape.RECTANGLE,
+        ObjectShape.SIX_POINT_STAR, ObjectShape.ARROW,
+    ]);
+    const shapePool  = allShapes.slice(0, rndInt(3, 5));
+    const useHollow  = Math.random() < 0.20;
+    const sw         = rnd(0.12, 0.20);
+    const cellSize   = rnd(7, 14);
+    const step       = cellSize * rnd(1.10, 1.28);
+    const colorOrder = shuffle([0, 1, 2, 3]);
+    const pattern    = rndInt(0, 3);
+
+    const objs: GameObject[] = [];
+    let idx = 0;
+
+    for (let row = -1; row * step < 108; row++) {
+        for (let c = -1; c * step < 108; c++) {
+            const x     = c * step;
+            const y     = row * step;
+            const shape = shapePool[idx % shapePool.length];
+            const rot   = rnd(-15, 15);
+
+            let ci: number;
+            switch (pattern) {
+                case 0:  ci = ((c            % 4) + 4) % 4; break;
+                case 1:  ci = ((row          % 4) + 4) % 4; break;
+                case 2:  ci = (((c + row)    % 4) + 4) % 4; break;
+                default: ci = (((c * 2 + row) % 4) + 4) % 4; break;
+            }
+            const color = TARGET_COLORS[colorOrder[ci]];
+
+            if (useHollow) {
+                objs.push(hollow(`ms-${idx++}`, x, y, cellSize, cellSize, color, shape, rot, sw));
+            } else {
+                objs.push(solid(`ms-${idx++}`, x, y, cellSize, cellSize, color, shape, rot));
+            }
+        }
+    }
+    return objs;
+}
+
 // ── MAIN EXPORT ───────────────────────────────────────────────────────────────
 export const generateObjects = (
     config: RoundConfig,
@@ -633,10 +775,13 @@ export const generateObjects = (
         genBoldBlocks,
         genParallelStripes,
         genLargeOverlapping,
-        genWavyStripes,          // NEW — dual-sine wavy ribbons
-        genRadialPie,            // NEW — pie/pinwheel radial slices
-        genConcentricWaveRings,  // NEW — distance-based rings with petal waves
-        genTextGrid,             // NEW — character/letter grid
+        genWavyStripes,          // dual-sine wavy ribbons
+        genRadialPie,            // pie/pinwheel radial slices
+        genConcentricWaveRings,  // distance-based rings with petal waves
+        genTextGrid,             // character/letter grid
+        genVoronoi,              // NEW — nearest-seed organic blobs
+        genStaggeredDots,        // NEW — hex-offset halftone dot grid
+        genMixedShapes,          // NEW — multi-shape mosaic, colour by position
     ]);
     const objects = generator();
 
