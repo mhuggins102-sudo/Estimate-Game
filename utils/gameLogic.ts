@@ -2,104 +2,275 @@ import { GameObject, ObjectColor, ObjectShape, RoundConfig } from '../types';
 
 const TARGET_COLORS = [ObjectColor.RED, ObjectColor.BLUE, ObjectColor.GREEN, ObjectColor.YELLOW];
 
-// ── POLYGON HIT-TEST HELPERS ─────────────────────────────────────────────────
-function pointInPolygon(x: number, y: number, vertices: number[][]): boolean {
-    let inside = false;
-    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-        const xi = vertices[i][0], yi = vertices[i][1];
-        const xj = vertices[j][0], yj = vertices[j][1];
-        const intersect = ((yi > y) !== (yj > y))
-            && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
-    }
-    return inside;
-}
-
-const POLY = {
-    triangle:  [[0.5, 0.05], [0.05, 0.95], [0.95, 0.95]] as number[][],
-    diamond:   [[0.5, 0],    [1, 0.5],     [0.5, 1],     [0, 0.5]] as number[][],
-    star5: [
-        [0.5, 0.05], [0.61, 0.35], [0.98, 0.35], [0.68, 0.57],
-        [0.79, 0.91], [0.5, 0.70], [0.21, 0.91], [0.32, 0.57],
-        [0.02, 0.35], [0.39, 0.35],
-    ] as number[][],
-    arrow: [
-        [0.5, 0.05], [0.05, 0.5],  [0.25, 0.5],
-        [0.25, 0.95],[0.75, 0.95], [0.75, 0.5], [0.95, 0.5],
-    ] as number[][],
-    star6tri1: [[0.5, 0.05], [0.15, 0.75], [0.85, 0.75]] as number[][],
-    star6tri2: [[0.5, 0.95], [0.15, 0.25], [0.85, 0.25]] as number[][],
+// ── CANVAS-BASED PIXEL SAMPLING ───────────────────────────────────────────────
+// Exact hex colors matching GameObjectItem.tsx FLAT_COLOR.
+// These are used to paint objects onto an offscreen canvas so we can read back
+// real pixel values — eliminating any gap between the math and what renders.
+const COLOR_HEX: Record<ObjectColor, string> = {
+    [ObjectColor.RED]:    '#ef4444',
+    [ObjectColor.BLUE]:   '#3b82f6',
+    [ObjectColor.GREEN]:  '#22c55e',
+    [ObjectColor.YELLOW]: '#eab308',
+    [ObjectColor.WHITE]:  '#f8fafc',
 };
 
-// ── SOLID SHAPE HIT-TEST (normalised 0-1 coords) ──────────────────────────────
-function isPointInSolidNorm(nx: number, ny: number, shape: ObjectShape): boolean {
-    const cx = nx - 0.5, cy = ny - 0.5;
-    const distSq = cx * cx + cy * cy;
-    switch (shape) {
-        case ObjectShape.RECTANGLE:
-        case ObjectShape.FRAME:
-            return true;
-        case ObjectShape.CIRCLE:
-        case ObjectShape.RING:
-            return distSq <= 0.25;
-        case ObjectShape.TRIANGLE:
-            return pointInPolygon(nx, ny, POLY.triangle);
-        case ObjectShape.DIAMOND:
-            return pointInPolygon(nx, ny, POLY.diamond);
-        case ObjectShape.STAR:
-            return pointInPolygon(nx, ny, POLY.star5);
-        case ObjectShape.ARROW:
-            return pointInPolygon(nx, ny, POLY.arrow);
-        case ObjectShape.SIX_POINT_STAR:
-            return pointInPolygon(nx, ny, POLY.star6tri1) || pointInPolygon(nx, ny, POLY.star6tri2);
-        case ObjectShape.HEART: {
-            if (ny < 0.5) {
-                if (nx < 0.5) return Math.pow(nx - 0.25, 2) + Math.pow(ny - 0.25, 2) <= 0.055;
-                return Math.pow(nx - 0.75, 2) + Math.pow(ny - 0.25, 2) <= 0.055;
-            }
-            return ny <= 0.92 - Math.abs(nx - 0.5) * 1.6;
-        }
-        case ObjectShape.TEXT:
-            // Bold capital letters cover ≈ 40% of their bounding box.
-            // A centred inner square of side 0.64 gives 0.64² ≈ 41% coverage,
-            // which matches typical Arial Black glyph ink density.
-            return nx >= 0.18 && nx <= 0.82 && ny >= 0.18 && ny <= 0.82;
-        default:
-            return distSq <= 0.25;
+// RGB components for nearest-colour classification of anti-aliased edge pixels.
+const COLOR_RGB: Record<ObjectColor, [number, number, number]> = {
+    [ObjectColor.RED]:    [239, 68,  68 ],
+    [ObjectColor.BLUE]:   [59,  130, 246],
+    [ObjectColor.GREEN]:  [34,  197, 94 ],
+    [ObjectColor.YELLOW]: [234, 179, 8  ],
+    [ObjectColor.WHITE]:  [248, 250, 252],
+};
+
+function classifyPixel(r: number, g: number, b: number): ObjectColor {
+    let best: ObjectColor = ObjectColor.WHITE;
+    let bestDist = Infinity;
+    for (const color of ([...TARGET_COLORS, ObjectColor.WHITE] as ObjectColor[])) {
+        const [cr, cg, cb] = COLOR_RGB[color];
+        const d = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2;
+        if (d < bestDist) { bestDist = d; best = color; }
     }
+    return best;
 }
 
-// ── MAIN SHAPE HIT-TEST ───────────────────────────────────────────────────────
-// Handles position, rotation and hollow subtraction.
-function isPointInShape(px: number, py: number, obj: GameObject): boolean {
-    let lx = px - obj.x;
-    let ly = py - obj.y;
+/**
+ * Draw one GameObject onto a Canvas 2D context.
+ * Coordinates mirror GameObjectItem.tsx SVG rendering exactly:
+ * - Same polygon vertices (normalised 0-100 coordinates)
+ * - Same bezier control points for HEART
+ * - Rotation around bounding-box centre, matching CSS transform-origin:center
+ * - Hollow shapes use stroke-only (no fill), solid shapes use flat fill
+ */
+function drawObjOnCanvas(
+    ctx: CanvasRenderingContext2D,
+    obj: GameObject,
+    cw: number,  // canvas width  in pixels
+    ch: number,  // canvas height in pixels
+): void {
+    const ow  = (obj.w / 100) * cw;
+    const oh  = (obj.h / 100) * ch;
+    const pcx = (obj.x / 100) * cw + ow / 2;   // pivot centre x (canvas px)
+    const pcy = (obj.y / 100) * ch + oh / 2;   // pivot centre y (canvas px)
+    const rot = (obj.rotation ?? 0) * (Math.PI / 180);
 
-    if (obj.rotation) {
-        const hx = obj.w / 2, hy = obj.h / 2;
-        const rad = -obj.rotation * (Math.PI / 180);
-        const cosR = Math.cos(rad), sinR = Math.sin(rad);
-        const dx = lx - hx, dy = ly - hy;
-        lx = dx * cosR - dy * sinR + hx;
-        ly = dx * sinR + dy * cosR + hy;
+    const isHollow = !!(obj.hollow || obj.shape === ObjectShape.RING || obj.shape === ObjectShape.FRAME);
+    const sw  = Math.max(0.05, Math.min(0.45, obj.strokeWidth ?? 0.15));
+    const hex = COLOR_HEX[obj.color] ?? '#f8fafc';
+
+    // Translate to object centre, rotate.  All shape coordinates below are in
+    // the object's local space with (0,0) at the object centre.
+    ctx.save();
+    ctx.translate(pcx, pcy);
+    ctx.rotate(rot);
+
+    // Map normalised (0-100) SVG-viewBox coords → local canvas pixels
+    const lx = (v: number) => (v / 100 - 0.5) * ow;
+    const ly = (v: number) => (v / 100 - 0.5) * oh;
+
+    ctx.beginPath();
+
+    switch (obj.shape) {
+
+        // ── CIRCLE / RING ─────────────────────────────────────────────────────
+        // SVG solid:  <circle r="49">         → r = 49% of width
+        // SVG hollow: <circle r="50-halfSW">  → r = (50 - sw*50)% of width,
+        //             stroke-width = sw * 100 SVG units = sw * ow canvas px
+        case ObjectShape.CIRCLE:
+        case ObjectShape.RING: {
+            const halfSW = sw * 50;
+            const r = isHollow
+                ? Math.max(0.5, (50 - halfSW) / 100 * ow)
+                : 49 / 100 * ow;
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            if (isHollow) {
+                ctx.strokeStyle = hex;
+                ctx.lineWidth   = sw * ow;
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = hex;
+                ctx.fill();
+            }
+            ctx.restore();
+            return;
+        }
+
+        // ── RECTANGLE / FRAME ─────────────────────────────────────────────────
+        // SVG hollow: rect path inset by halfSW, stroke-width = sw*100 units.
+        // Outer stroke edge is at the container boundary; inner edge at sw*ow.
+        case ObjectShape.RECTANGLE:
+        case ObjectShape.FRAME: {
+            if (isHollow) {
+                const lineW = sw * Math.min(ow, oh);
+                const ins   = lineW / 2;
+                ctx.rect(-ow / 2 + ins, -oh / 2 + ins, ow - 2 * ins, oh - 2 * ins);
+                ctx.strokeStyle = hex;
+                ctx.lineWidth   = lineW;
+                ctx.stroke();
+            } else {
+                ctx.rect(-ow / 2, -oh / 2, ow, oh);
+                ctx.fillStyle = hex;
+                ctx.fill();
+            }
+            ctx.restore();
+            return;
+        }
+
+        // ── TRIANGLE ─────────────────────────────────────────────────────────
+        // SVG: polygon points="50,5 5,95 95,95"
+        case ObjectShape.TRIANGLE: {
+            const pts = [[50,5],[5,95],[95,95]];
+            ctx.moveTo(lx(pts[0][0]), ly(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(lx(pts[i][0]), ly(pts[i][1]));
+            ctx.closePath();
+            break;
+        }
+
+        // ── DIAMOND ───────────────────────────────────────────────────────────
+        // SVG: polygon points="50,0 100,50 50,100 0,50"
+        case ObjectShape.DIAMOND: {
+            const pts = [[50,0],[100,50],[50,100],[0,50]];
+            ctx.moveTo(lx(pts[0][0]), ly(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(lx(pts[i][0]), ly(pts[i][1]));
+            ctx.closePath();
+            break;
+        }
+
+        // ── 5-POINT STAR ──────────────────────────────────────────────────────
+        // SVG: polygon points="50,5 61,35 98,35 68,57 79,91 50,70 21,91 32,57 2,35 39,35"
+        case ObjectShape.STAR: {
+            const pts = [[50,5],[61,35],[98,35],[68,57],[79,91],[50,70],[21,91],[32,57],[2,35],[39,35]];
+            ctx.moveTo(lx(pts[0][0]), ly(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(lx(pts[i][0]), ly(pts[i][1]));
+            ctx.closePath();
+            break;
+        }
+
+        // ── 6-POINT STAR ──────────────────────────────────────────────────────
+        // SVG: two polygons — "50,5 15,75 85,75" and "50,95 15,25 85,25"
+        case ObjectShape.SIX_POINT_STAR: {
+            const t1 = [[50,5],[15,75],[85,75]];
+            ctx.moveTo(lx(t1[0][0]), ly(t1[0][1]));
+            for (let i = 1; i < t1.length; i++) ctx.lineTo(lx(t1[i][0]), ly(t1[i][1]));
+            ctx.closePath();
+            const t2 = [[50,95],[15,25],[85,25]];
+            ctx.moveTo(lx(t2[0][0]), ly(t2[0][1]));
+            for (let i = 1; i < t2.length; i++) ctx.lineTo(lx(t2[i][0]), ly(t2[i][1]));
+            ctx.closePath();
+            break;
+        }
+
+        // ── HEART ─────────────────────────────────────────────────────────────
+        // Replicates SVG path exactly:
+        // "M50 85 C50 85 10 55 10 30  C10 15 25 5 40 5  C50 5 50 15 50 15
+        //  C50 15 50 5 60 5  C75 5 90 15 90 30  C90 55 50 85 50 85 Z"
+        case ObjectShape.HEART: {
+            ctx.moveTo(lx(50), ly(85));
+            ctx.bezierCurveTo(lx(50), ly(85), lx(10), ly(55), lx(10), ly(30));
+            ctx.bezierCurveTo(lx(10), ly(15), lx(25), ly(5),  lx(40), ly(5));
+            ctx.bezierCurveTo(lx(50), ly(5),  lx(50), ly(15), lx(50), ly(15));
+            ctx.bezierCurveTo(lx(50), ly(15), lx(50), ly(5),  lx(60), ly(5));
+            ctx.bezierCurveTo(lx(75), ly(5),  lx(90), ly(15), lx(90), ly(30));
+            ctx.bezierCurveTo(lx(90), ly(55), lx(50), ly(85), lx(50), ly(85));
+            ctx.closePath();
+            break;
+        }
+
+        // ── ARROW ─────────────────────────────────────────────────────────────
+        // SVG: polygon points="50,5 5,50 25,50 25,95 75,95 75,50 95,50"
+        case ObjectShape.ARROW: {
+            const pts = [[50,5],[5,50],[25,50],[25,95],[75,95],[75,50],[95,50]];
+            ctx.moveTo(lx(pts[0][0]), ly(pts[0][1]));
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(lx(pts[i][0]), ly(pts[i][1]));
+            ctx.closePath();
+            break;
+        }
+
+        // ── TEXT ──────────────────────────────────────────────────────────────
+        // Draw the actual glyph using canvas text API — the only truly accurate
+        // way to measure character ink coverage.
+        // SVG uses: fontSize=88, textAnchor=middle, dominantBaseline=middle
+        case ObjectShape.TEXT: {
+            const fontSize = Math.min(ow, oh) * 0.88;
+            ctx.font             = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
+            ctx.textAlign        = 'center';
+            ctx.textBaseline     = 'middle';
+            ctx.fillStyle        = hex;
+            ctx.fillText(obj.char ?? '?', 0, 0);
+            ctx.restore();
+            return;
+        }
+
+        // ── DEFAULT (circle fallback) ──────────────────────────────────────────
+        default: {
+            ctx.arc(0, 0, ow / 2 * 0.49, 0, Math.PI * 2);
+            break;
+        }
     }
 
-    const nx = lx / obj.w;
-    const ny = ly / obj.h;
-    if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return false;
+    if (isHollow) {
+        ctx.strokeStyle = hex;
+        ctx.lineWidth   = sw * Math.min(ow, oh);
+        ctx.stroke();
+    } else {
+        ctx.fillStyle = hex;
+        ctx.fill();
+    }
 
-    if (!isPointInSolidNorm(nx, ny, obj.shape)) return false;
-    if (!obj.hollow) return true;
+    ctx.restore();
+}
 
-    // Hollow: inner region uses the same shape scaled by (1 – 2·sw), centred at (0.5,0.5).
-    const sw = Math.max(0.05, Math.min(0.45, obj.strokeWidth ?? 0.15));
-    const innerScale = 1 - 2 * sw;
-    if (innerScale <= 0) return true;
+/**
+ * Render all objects onto an offscreen canvas (same draw order as React),
+ * then read every pixel and classify its colour.
+ * Returns per-colour totals and per-row (Y) distribution for the sweep animation.
+ */
+function sampleViaCanvas(
+    objects: GameObject[],
+    SX: number,
+    SY: number,
+): { raw: Record<ObjectColor, number>; vDist: Record<ObjectColor, number[]> } {
+    const canvas  = document.createElement('canvas');
+    canvas.width  = SX;
+    canvas.height = SY;
+    const ctx = canvas.getContext('2d')!;
 
-    const inx = (nx - sw) / innerScale;
-    const iny = (ny - sw) / innerScale;
-    if (inx < 0 || inx > 1 || iny < 0 || iny > 1) return true;
-    return !isPointInSolidNorm(inx, iny, obj.shape);
+    // White background — matches the board's bg-white CSS class
+    ctx.fillStyle = COLOR_HEX[ObjectColor.WHITE];
+    ctx.fillRect(0, 0, SX, SY);
+
+    // Draw objects in array order: objects[0] = largest bounding box = behind,
+    // objects[n-1] = smallest = in front.  This replicates React's render order
+    // where each subsequent element sits on top via position:absolute + zIndex.
+    for (const obj of objects) {
+        drawObjOnCanvas(ctx, obj, SX, SY);
+    }
+
+    const imageData = ctx.getImageData(0, 0, SX, SY);
+    const data      = imageData.data; // RGBA, 4 bytes per pixel
+
+    const raw: Record<ObjectColor, number> = {
+        [ObjectColor.RED]: 0, [ObjectColor.BLUE]: 0,
+        [ObjectColor.GREEN]: 0, [ObjectColor.YELLOW]: 0, [ObjectColor.WHITE]: 0,
+    };
+    const vDist: Record<ObjectColor, number[]> = {
+        [ObjectColor.RED]:    new Array(SY).fill(0),
+        [ObjectColor.BLUE]:   new Array(SY).fill(0),
+        [ObjectColor.GREEN]:  new Array(SY).fill(0),
+        [ObjectColor.YELLOW]: new Array(SY).fill(0),
+        [ObjectColor.WHITE]:  new Array(SY).fill(0),
+    };
+
+    for (let j = 0; j < SY; j++) {
+        for (let i = 0; i < SX; i++) {
+            const base  = (j * SX + i) * 4;
+            const color = classifyPixel(data[base], data[base + 1], data[base + 2]);
+            raw[color]++;
+            vDist[color][j]++;
+        }
+    }
+
+    return { raw, vDist };
 }
 
 // ── ROUND CONFIG ──────────────────────────────────────────────────────────────
@@ -141,11 +312,15 @@ function hollow(
     return { id, x, y, w, h, rotation, color, shape, hollow: true, strokeWidth: sw, zIndex: 0, area: 0 };
 }
 
+// Shapes that work well as dense tile-grid cells (each distinct look)
+const TILE_SHAPES = [
+    ObjectShape.RECTANGLE,
+    ObjectShape.CIRCLE,
+    ObjectShape.DIAMOND,
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 1 – REGULAR GRID
-// All cells the same shape, colours assigned by a simple position formula
-// (column stripes / row stripes / diagonal / XOR). Sizes and gap vary each
-// time so consecutive rounds look different. Optionally all hollow.
 // ─────────────────────────────────────────────────────────────────────────────
 function genRegularGrid(): GameObject[] {
     const shape = pick([
@@ -160,9 +335,8 @@ function genRegularGrid(): GameObject[] {
     const cellSize = rnd(6.5, 14);
     const step     = cellSize * rnd(1.08, 1.30);
 
-    // Color pattern: 0=col, 1=row, 2=diagonal, 3=double-diagonal
-    const pattern = rndInt(0, 3);
-    const colorOrder = shuffle([0, 1, 2, 3]); // which TARGET_COLOR maps to which index
+    const pattern    = rndInt(0, 3);
+    const colorOrder = shuffle([0, 1, 2, 3]);
 
     const objs: GameObject[] = [];
     let idx = 0;
@@ -192,9 +366,6 @@ function genRegularGrid(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 2 – CONCENTRIC NESTED
-// The same shape drawn 5-9 times, each smaller, all centred at one point.
-// Colours cycle so each layer is a different colour. The painter's algorithm
-// (large behind, small in front) produces the nested-heart / bullseye look.
 // ─────────────────────────────────────────────────────────────────────────────
 function genConcentricNested(): GameObject[] {
     const shape = pick([
@@ -208,7 +379,6 @@ function genConcentricNested(): GameObject[] {
     const maxSize    = rnd(65, 96);
     const shrink     = rnd(0.60, 0.78);
     const colorStart = rndInt(0, 3);
-    // Small per-layer rotation gives a sense of depth without clutter
     const baseRot  = rnd(0, 360);
     const rotStep  = rnd(2, 12);
 
@@ -228,9 +398,6 @@ function genConcentricNested(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 3 – SCATTERED SAME SHAPE
-// Many instances of one shape, randomly scattered. Size varies from tiny to
-// medium. Either all solid OR all hollow (not mixed). White space visible.
-// Like the scattered-rings card in Illusion.
 // ─────────────────────────────────────────────────────────────────────────────
 function genScattered(): GameObject[] {
     const candidates = [
@@ -252,11 +419,10 @@ function genScattered(): GameObject[] {
 
     const objs: GameObject[] = [];
     for (let i = 0; i < count; i++) {
-        // Bias toward smaller sizes (power-law)
         const size = Math.max(3, rnd(4, 24) * Math.pow(Math.random(), 0.5));
         const x    = rnd(-3, 100 - size + 3);
         const y    = rnd(-3, 100 - size + 3);
-        const color = colors[i % 4]; // cycle colours evenly
+        const color = colors[i % 4];
         const rot  = rnd(0, 360);
 
         if (useHollow) {
@@ -269,14 +435,11 @@ function genScattered(): GameObject[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STYLE 4 – BOLD RECTANGULAR BLOCKS
-// Canvas subdivided into irregular rectangles (Mondrian-inspired). Each block
-// is one solid colour; block sizes vary to make area estimation difficult.
+// STYLE 4 – BOLD RECTANGULAR BLOCKS (Mondrian-inspired)
 // ─────────────────────────────────────────────────────────────────────────────
 function genBoldBlocks(): GameObject[] {
-    // Horizontal cuts define row heights; vertical cuts define column widths.
-    const numHCuts = rndInt(1, 3); // 2-4 rows
-    const numVCuts = rndInt(1, 3); // 2-4 cols
+    const numHCuts = rndInt(1, 3);
+    const numVCuts = rndInt(1, 3);
 
     const hPts = Array.from({ length: numHCuts }, () => rnd(15, 85)).sort((a, b) => a - b);
     const vPts = Array.from({ length: numVCuts }, () => rnd(15, 85)).sort((a, b) => a - b);
@@ -284,7 +447,6 @@ function genBoldBlocks(): GameObject[] {
     const ys = [0, ...hPts, 100];
     const xs = [0, ...vPts, 100];
 
-    // Collect all cells
     const cells: { x: number; y: number; w: number; h: number }[] = [];
     for (let r = 0; r < ys.length - 1; r++) {
         for (let c = 0; c < xs.length - 1; c++) {
@@ -296,7 +458,6 @@ function genBoldBlocks(): GameObject[] {
         }
     }
 
-    // Assign colours so each appears at least once; balance by area thereafter
     const shuffledCells = shuffle(cells);
     const colorArea: Record<ObjectColor, number> = {
         [ObjectColor.RED]:    0, [ObjectColor.BLUE]:   0,
@@ -305,7 +466,6 @@ function genBoldBlocks(): GameObject[] {
 
     const objs: GameObject[] = [];
     shuffledCells.forEach((cell, i) => {
-        // First 4 cells: one of each colour; after that: pick least-covered
         let color: ObjectColor;
         if (i < 4) {
             color = TARGET_COLORS[i];
@@ -314,7 +474,7 @@ function genBoldBlocks(): GameObject[] {
         }
         colorArea[color] += cell.w * cell.h;
 
-        const gap = 1.0; // thin gap between blocks
+        const gap = 1.0;
         objs.push(solid(
             `bb-${i}`,
             cell.x + gap / 2, cell.y + gap / 2,
@@ -328,48 +488,39 @@ function genBoldBlocks(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 5 – PARALLEL STRIPES
-// Bold parallel stripes in 4 colours. Axis-aligned (0° or 90°) or diagonal
-// (30°, 45°, 60°). All shapes in the stripe are the same type.
 // ─────────────────────────────────────────────────────────────────────────────
 function genParallelStripes(): GameObject[] {
-    const angleDeg  = pick([0, 30, 45, 60, 90]);
-    const numStripes = rndInt(4, 9);        // total stripes (cycles through 4 colours)
+    const angleDeg   = pick([0, 30, 45, 60, 90]);
+    const numStripes = rndInt(4, 9);
     const colors     = shuffle([...TARGET_COLORS]);
 
     const objs: GameObject[] = [];
 
     if (angleDeg === 0 || angleDeg === 90) {
-        // ── Axis-aligned: simple solid rectangles ────────────────────────────
         const stripeSize = 100 / numStripes;
         for (let i = 0; i < numStripes; i++) {
             const color = colors[i % 4];
-            if (angleDeg === 0) { // horizontal bands
+            if (angleDeg === 0) {
                 objs.push(solid(`ps-${i}`, 0, i * stripeSize, 100, stripeSize, color, ObjectShape.RECTANGLE));
-            } else {              // vertical bands
+            } else {
                 objs.push(solid(`ps-${i}`, i * stripeSize, 0, stripeSize, 100, color, ObjectShape.RECTANGLE));
             }
         }
     } else {
-        // ── Diagonal: dense grid of one shape, coloured by stripe band ───────
-        // Shape fills each grid cell; colour is determined by which diagonal
-        // band the cell's centre falls in — exactly like the Illusion card.
         const shape    = pick([ObjectShape.CIRCLE, ObjectShape.DIAMOND, ObjectShape.RECTANGLE, ObjectShape.TRIANGLE]);
         const cellSize = rnd(5.5, 11);
         const step     = cellSize * rnd(1.08, 1.25);
         const rad      = angleDeg * (Math.PI / 180);
         const cosA     = Math.cos(rad), sinA = Math.sin(rad);
-        // Stripe bandwidth in projection units (width of each colour band)
         const bandW    = 100 / numStripes;
 
         let idx = 0;
         for (let row = -3; row * step < 110; row++) {
             for (let c = -3; c * step < 110; c++) {
                 const x = c * step, y = row * step;
-                // Project cell centre onto the stripe normal direction
                 const proj     = (x + cellSize / 2) * cosA + (y + cellSize / 2) * sinA;
                 const bandIdx  = Math.floor(proj / bandW);
                 const color    = colors[((bandIdx % 4) + 4) % 4];
-                // Align rotation to stripe direction for a cleaner look
                 const rot      = angleDeg + rnd(-10, 10);
                 objs.push(solid(`ps-${idx++}`, x, y, cellSize, cellSize, color, shape, rot));
             }
@@ -380,9 +531,6 @@ function genParallelStripes(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 6 – LARGE OVERLAPPING SHAPES
-// 4-6 large shapes of ONE type, one colour each, heavily overlapping near
-// the canvas centre. A handful of smaller accents of the same shape.
-// Like the organic-blob cards in Illusion — simple but deceptive.
 // ─────────────────────────────────────────────────────────────────────────────
 function genLargeOverlapping(): GameObject[] {
     const shape  = pick([
@@ -395,7 +543,6 @@ function genLargeOverlapping(): GameObject[] {
 
     const objs: GameObject[] = [];
 
-    // Large shapes — clustered around centre with some random spread
     for (let i = 0; i < numBig; i++) {
         const cx = rnd(25, 75);
         const cy = rnd(25, 75);
@@ -407,7 +554,6 @@ function genLargeOverlapping(): GameObject[] {
         ));
     }
 
-    // Small accents of the same shape scattered everywhere
     const accentCount = rndInt(8, 18);
     for (let i = 0; i < accentCount; i++) {
         const w = rnd(3, 13);
@@ -424,21 +570,20 @@ function genLargeOverlapping(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 7 – WAVY STRIPES
-// Dense grid of small cells coloured by a dual-sine-wave formula.
-// The interference between two waves with different frequencies creates the
-// same organic ribbon look seen on real Illusion cards — but the boundaries
-// appear straight while the actual colour percentages deceive the eye.
+// Dense tile grid; colour follows a dual-sine-wave formula for organic ribbons.
+// Uses a random tile shape so it looks visually distinct from other grid styles.
 // ─────────────────────────────────────────────────────────────────────────────
 function genWavyStripes(): GameObject[] {
+    const tileShape  = pick(TILE_SHAPES);
     const cellSize   = rnd(4.5, 7.5);
     const step       = cellSize + 0.25;
     const colorOrder = shuffle([0, 1, 2, 3]);
 
-    const numBands  = rndInt(4, 9);       // full colour cycles across canvas
+    const numBands  = rndInt(4, 9);
     const bandW     = 100 / numBands;
-    const waveAmp1  = rnd(5, 22);         // primary wave amplitude (% units)
+    const waveAmp1  = rnd(5, 22);
     const waveFreq1 = rnd(0.03, 0.10);
-    const waveAmp2  = rnd(1, 7);          // secondary wave (creates interference)
+    const waveAmp2  = rnd(1, 7);
     const waveFreq2 = rnd(0.07, 0.18);
     const direction = pick(['h', 'v', 'd'] as const);
 
@@ -452,7 +597,6 @@ function genWavyStripes(): GameObject[] {
             const cx = x + cellSize / 2;
             const cy = y + cellSize / 2;
 
-            // Position along the band axis, perturbed by the wave function
             let pos: number;
             if (direction === 'h') {
                 pos = cy
@@ -473,7 +617,7 @@ function genWavyStripes(): GameObject[] {
             const bandIdx    = Math.floor(normalized / bandW) % 4;
             const color      = TARGET_COLORS[colorOrder[bandIdx]];
 
-            objs.push(solid(`wv-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+            objs.push(solid(`wv-${idx++}`, x, y, cellSize, cellSize, color, tileShape));
         }
     }
     return objs;
@@ -481,20 +625,19 @@ function genWavyStripes(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 8 – RADIAL PIE / PINWHEEL
-// Each cell is coloured by its angle from a focal point, creating pie-slice
-// or spiral patterns. The optional twist parameter morphs a clean pie into a
-// pinwheel — a classic Illusion card motif.
+// Colour by angle from focal point. Random tile shape for visual variety.
 // ─────────────────────────────────────────────────────────────────────────────
 function genRadialPie(): GameObject[] {
+    const tileShape  = pick(TILE_SHAPES);
     const cellSize   = rnd(4.5, 7.5);
     const step       = cellSize + 0.25;
     const colorOrder = shuffle([0, 1, 2, 3]);
 
-    const numWedges = rndInt(4, 16);            // total angular wedges
+    const numWedges = rndInt(4, 16);
     const cx        = rnd(28, 72);
     const cy        = rnd(28, 72);
-    const twist     = rnd(-0.05, 0.05);         // spiral coefficient (0 = flat pie)
-    const innerGap  = Math.random() < 0.25 ? rnd(6, 16) : 0; // optional blank centre
+    const twist     = rnd(-0.05, 0.05);
+    const innerGap  = Math.random() < 0.25 ? rnd(6, 16) : 0;
 
     const objs: GameObject[] = [];
     let idx = 0;
@@ -514,7 +657,7 @@ function genRadialPie(): GameObject[] {
             const wedgeIdx     = Math.floor(twistedAngle / (Math.PI * 2 / numWedges)) % 4;
             const color        = TARGET_COLORS[colorOrder[wedgeIdx]];
 
-            objs.push(solid(`rp-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+            objs.push(solid(`rp-${idx++}`, x, y, cellSize, cellSize, color, tileShape));
         }
     }
     return objs;
@@ -522,21 +665,20 @@ function genRadialPie(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 9 – CONCENTRIC WAVE RINGS
-// Distance from a focal point determines the colour band, with an optional
-// angular wave that turns clean circles into flower-petal or star-ripple rings.
-// The squish ratio makes elliptical variants for added visual variety.
+// Colour by radial distance with optional wave. Random tile shape.
 // ─────────────────────────────────────────────────────────────────────────────
 function genConcentricWaveRings(): GameObject[] {
+    const tileShape  = pick(TILE_SHAPES);
     const cellSize   = rnd(4.5, 7.0);
     const step       = cellSize + 0.25;
     const colorOrder = shuffle([0, 1, 2, 3]);
 
     const cx       = rnd(25, 75);
     const cy       = rnd(25, 75);
-    const ringBand = rnd(5, 16);            // colour band width (% units)
-    const waveAmp  = rnd(0, 5);            // angular perturbation amplitude
-    const waveFreq = rndInt(3, 9);         // petal count when waveAmp > 0
-    const squishX  = rnd(0.65, 1.35);     // ellipse aspect ratio
+    const ringBand = rnd(5, 16);
+    const waveAmp  = rnd(0, 5);
+    const waveFreq = rndInt(3, 9);
+    const squishX  = rnd(0.65, 1.35);
 
     const objs: GameObject[] = [];
     let idx = 0;
@@ -557,7 +699,7 @@ function genConcentricWaveRings(): GameObject[] {
             const ringIdx    = Math.floor(normalized / ringBand) % 4;
             const color      = TARGET_COLORS[colorOrder[ringIdx]];
 
-            objs.push(solid(`cr-${idx++}`, x, y, cellSize, cellSize, color, ObjectShape.RECTANGLE));
+            objs.push(solid(`cr-${idx++}`, x, y, cellSize, cellSize, color, tileShape));
         }
     }
     return objs;
@@ -565,9 +707,6 @@ function genConcentricWaveRings(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 10 – CHARACTER / TEXT GRID
-// A regular grid (or loose scatter) of alphanumeric characters, each solid-
-// filled in one of the four colours. The research notes that real Illusion
-// cards include "occasional letter or number" — this makes that a full style.
 // ─────────────────────────────────────────────────────────────────────────────
 function genTextGrid(): GameObject[] {
     const CHARS = [
@@ -581,7 +720,7 @@ function genTextGrid(): GameObject[] {
     if (useGrid) {
         const cellSize = rnd(10, 16);
         const step     = cellSize * rnd(1.10, 1.25);
-        const pattern  = rndInt(0, 2); // 0=cols, 1=rows, 2=diagonal
+        const pattern  = rndInt(0, 2);
         const char     = pick(CHARS);
         let idx = 0;
 
@@ -604,7 +743,6 @@ function genTextGrid(): GameObject[] {
             }
         }
     } else {
-        // Scattered characters of varying sizes
         const count = rndInt(22, 48);
         for (let i = 0; i < count; i++) {
             const size  = rnd(6, 22);
@@ -625,18 +763,15 @@ function genTextGrid(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 11 – VORONOI MOSAIC
-// Scatter several "seed" points per colour.  Every grid cell is coloured by
-// whichever seed is closest (nearest-neighbour / Voronoi rule).  This creates
-// organic, amoeba-like blobs with no clear boundaries — impossible to estimate
-// by tracing outlines, forcing pure area judgement.
+// Nearest-neighbour Voronoi colouring — organic amoeba-like colour regions.
+// Uses larger cells so the region boundaries are clearly visible.
 // ─────────────────────────────────────────────────────────────────────────────
 function genVoronoi(): GameObject[] {
-    const cellSize      = rnd(4.5, 7.5);
+    const cellSize      = rnd(5.5, 9.0);   // slightly larger for more visible regions
     const step          = cellSize + 0.25;
     const colorOrder    = shuffle([0, 1, 2, 3]);
     const seedsPerColor = rndInt(2, 5);
 
-    // Place seed points for each colour
     const seeds: { cx: number; cy: number; ci: number }[] = [];
     for (let c = 0; c < 4; c++) {
         for (let s = 0; s < seedsPerColor; s++) {
@@ -654,7 +789,6 @@ function genVoronoi(): GameObject[] {
             const cx = x + cellSize / 2;
             const cy = y + cellSize / 2;
 
-            // Find nearest seed (squared distance — no sqrt needed for ordering)
             let minDist = Infinity, nearestCI = 0;
             for (const s of seeds) {
                 const dx = cx - s.cx, dy = cy - s.cy;
@@ -671,10 +805,6 @@ function genVoronoi(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 12 – STAGGERED DOT GRID (Halftone)
-// Alternating rows are offset by half a column width, producing hexagonal
-// close-packing reminiscent of classic halftone printing.  Circles, diamonds
-// or rectangles tile the canvas; colour follows col / row / diagonal striping.
-// Slight per-cell size variation gives a hand-drawn, organic quality.
 // ─────────────────────────────────────────────────────────────────────────────
 function genStaggeredDots(): GameObject[] {
     const shape      = pick([ObjectShape.CIRCLE, ObjectShape.DIAMOND, ObjectShape.RECTANGLE]);
@@ -683,7 +813,7 @@ function genStaggeredDots(): GameObject[] {
     const cellSize   = rnd(6, 12);
     const step       = cellSize * rnd(1.10, 1.30);
     const colorOrder = shuffle([0, 1, 2, 3]);
-    const pattern    = rndInt(0, 2); // 0=cols, 1=rows, 2=diagonal
+    const pattern    = rndInt(0, 2);
 
     const objs: GameObject[] = [];
     let idx = 0;
@@ -693,7 +823,6 @@ function genStaggeredDots(): GameObject[] {
         for (let c = -2; c * step < 115; c++) {
             const x  = c * step + offsetX;
             const y  = row * step;
-            // Slightly vary size for visual texture
             const sz = cellSize * rnd(0.82, 1.00);
 
             let ci: number;
@@ -716,10 +845,6 @@ function genStaggeredDots(): GameObject[] {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STYLE 13 – MIXED-SHAPE MOSAIC
-// A regular grid where each cell is independently drawn with one of 3-4 chosen
-// shapes, cycling through the pool.  Colour follows a position rule (col / row
-// / diagonal / double-diagonal).  Mixing shapes in one card prevents the eye
-// from grouping by shape — only area comparison works.  Optionally all hollow.
 // ─────────────────────────────────────────────────────────────────────────────
 function genMixedShapes(): GameObject[] {
     const allShapes = shuffle([
@@ -766,8 +891,6 @@ function genMixedShapes(): GameObject[] {
 }
 
 // ── GENERATOR ROTATION ────────────────────────────────────────────────────────
-// All 13 styles are dealt from a shuffled deck so every style appears once
-// before any style repeats.  The deck auto-refills when exhausted.
 const ALL_GENERATORS: Array<() => GameObject[]> = [
     genRegularGrid,
     genConcentricNested,
@@ -812,51 +935,22 @@ export const generateObjects = (
 
     // ── DEPTH SORT ────────────────────────────────────────────────────────────
     // Larger bounding-box area → lower zIndex → drawn behind.
-    // For concentric shapes this produces the correct nested look.
     objects.sort((a, b) => (b.w * b.h) - (a.w * a.h));
     objects.forEach((o, i) => { o.zIndex = i; });
 
-    // ── PIXEL-ACCURATE COLOUR SAMPLING ────────────────────────────────────────
-    // 350×350 = 122 500 samples. Each sample finds the topmost visible object.
-    // For hollow objects the interior is transparent (falls through to whatever
-    // is underneath, exactly matching what the player sees on screen).
+    // ── CANVAS PIXEL SAMPLING ─────────────────────────────────────────────────
+    // 350×350 = 122,500 pixels.  Draw every object on an offscreen canvas
+    // (same order and colours as on-screen), then read back pixel colours.
+    // This is exact — no mathematical approximation of shape boundaries.
     const SX = 350, SY = 350, TOTAL = SX * SY;
-    const stepX = 100 / SX, stepY = 100 / SY;
 
-    const raw: Record<ObjectColor, number> = {
-        [ObjectColor.RED]: 0, [ObjectColor.BLUE]: 0,
-        [ObjectColor.GREEN]: 0, [ObjectColor.YELLOW]: 0, [ObjectColor.WHITE]: 0,
-    };
-    const vDist: Record<ObjectColor, number[]> = {
-        [ObjectColor.RED]:    new Array(SY).fill(0),
-        [ObjectColor.BLUE]:   new Array(SY).fill(0),
-        [ObjectColor.GREEN]:  new Array(SY).fill(0),
-        [ObjectColor.YELLOW]: new Array(SY).fill(0),
-        [ObjectColor.WHITE]:  new Array(SY).fill(0),
-    };
-
-    for (let i = 0; i < SX; i++) {
-        const px = i * stepX + stepX / 2;
-        for (let j = 0; j < SY; j++) {
-            const py = j * stepY + stepY / 2;
-
-            // Iterate from front (highest zIndex = last in sorted array) to back.
-            let hitColor: ObjectColor = ObjectColor.WHITE;
-            for (let k = objects.length - 1; k >= 0; k--) {
-                if (isPointInShape(px, py, objects[k])) {
-                    hitColor = objects[k].color;
-                    break;
-                }
-            }
-            raw[hitColor]++;
-            vDist[hitColor][j]++;
-        }
-    }
+    const { raw, vDist } = sampleViaCanvas(objects, SX, SY);
 
     // Convert to percentages
     const breakdown = {} as Record<ObjectColor, number>;
     for (const c of TARGET_COLORS) breakdown[c] = (raw[c] / TOTAL) * 100;
-    const whitePct = (raw[ObjectColor.WHITE] / TOTAL) * 100;
+    breakdown[ObjectColor.WHITE] = (raw[ObjectColor.WHITE] / TOTAL) * 100;
+    const whitePct = breakdown[ObjectColor.WHITE];
 
     // ── CONSTRAINT CHECK ──────────────────────────────────────────────────────
     const hasZeroArea = TARGET_COLORS.some(c => breakdown[c] < 0.5);
