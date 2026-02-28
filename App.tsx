@@ -345,7 +345,7 @@ export default function App() {
 
   if (gameState === GameState.MENU) {
     return (
-      <div className="relative w-full h-screen flex flex-col items-center justify-center p-6 text-center font-sans bg-slate-900 z-50">
+      <div className="relative w-full h-screen overflow-hidden flex flex-col items-center justify-center p-6 text-center font-sans bg-slate-900 z-50">
         {renderBackground()}
         <div className="z-10 animate-float pointer-events-none">
             <h1 className="text-6xl font-black bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500 mb-2 drop-shadow-2xl">
@@ -373,7 +373,7 @@ export default function App() {
   if (gameState === GameState.GAME_OVER || gameState === GameState.VICTORY) {
      const isVictory = gameState === GameState.VICTORY;
      return (
-        <div className="relative w-full h-screen flex flex-col items-center justify-center p-6 text-center z-50 bg-slate-900">
+        <div className="relative w-full h-screen overflow-hidden flex flex-col items-center justify-center p-6 text-center z-50 bg-slate-900">
            {renderBackground()}
            <div className="z-10 bg-slate-800/90 p-8 rounded-2xl border border-slate-700 backdrop-blur-md shadow-2xl max-w-sm w-full">
                {isVictory ? <Trophy className="w-20 h-20 text-yellow-400 mx-auto mb-4" /> : <RotateCcw className="w-20 h-20 text-red-400 mx-auto mb-4" />}
@@ -424,7 +424,7 @@ export default function App() {
     };
 
     return (
-        <div className="w-full max-w-md px-4 pb-8 z-[60]">
+        <div className="w-full max-w-md px-4 pb-2 z-[60]">
             <div className="relative h-4 bg-slate-800 rounded-full w-full shadow-inner border border-slate-700">
                 <div 
                     className="absolute top-0 bottom-0 bg-blue-500/40 border-x border-blue-400 rounded-sm"
@@ -551,10 +551,10 @@ export default function App() {
           </div>
       )}
 
-      <div className="relative flex-1 w-full max-w-md mx-auto z-10 flex flex-col items-center justify-center">
+      <div className="relative flex-1 w-full max-w-md mx-auto z-10 flex flex-col items-center justify-start pt-2">
         
         {(gameState === GameState.REVEAL || (gameState === GameState.RESULT && !isViewingBoard)) && roundConfig && (
-            <div className="mb-4 text-center z-[60] animate-entrance">
+            <div className="mb-1 text-center z-[60] animate-entrance">
                  <div className={`text-6xl font-black text-${roundConfig.targetColor}-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)]`}>
                      {revealedArea.toFixed(1)}%
                  </div>
@@ -563,7 +563,7 @@ export default function App() {
         )}
 
         {gameState === GameState.RESULT && isViewingBoard && (
-            <div className="w-full max-w-sm grid grid-cols-4 gap-2 mb-6 z-[60] animate-entrance px-2">
+            <div className="w-full max-w-sm grid grid-cols-4 gap-2 mb-2 z-[60] animate-entrance px-2">
                 {[ObjectColor.RED, ObjectColor.BLUE, ObjectColor.GREEN, ObjectColor.YELLOW].map(color => {
                     const area = areaBreakdown[color] || 0;
                     return (
@@ -587,7 +587,7 @@ export default function App() {
         )}
 
         {(gameState === GameState.FLASH || gameState === GameState.REFLASH || gameState === GameState.REVEAL || (gameState === GameState.RESULT && isViewingBoard) || gameState === GameState.REVEAL_MISSION) && (
-          <div className="relative w-full aspect-square max-w-[350px] bg-white border-4 border-slate-300 overflow-hidden shadow-2xl rounded-lg mb-8">
+          <div className="relative w-full aspect-square max-w-[350px] bg-white border-4 border-slate-300 overflow-hidden shadow-2xl rounded-lg mb-2">
              <div className="absolute inset-0 z-0">
                 {renderObjects.map(obj => (
                      <GameObjectItem 
@@ -632,6 +632,8 @@ export default function App() {
              )}
           </div>
         )}
+
+        {(gameState === GameState.REVEAL || (gameState === GameState.RESULT && !isViewingBoard)) && renderVisualRange()}
 
         {gameState === GameState.PREP && roundConfig && (
             <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm z-20">
@@ -789,10 +791,6 @@ export default function App() {
                   </div>
              </div>
         )}
-      </div>
-
-      <div className="flex flex-col items-center pb-6">
-         {(gameState === GameState.REVEAL || (gameState === GameState.RESULT && !isViewingBoard)) && renderVisualRange()}
       </div>
 
     </div>
